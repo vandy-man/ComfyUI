@@ -31,6 +31,16 @@ async def cache_control(
         ".json"
     )
 
+    # Vite bundles under /assets/ carry content hashes in the filename, so they are
+    # immutable; caching them avoids re-fetching tens of MB through remote tunnels.
+    if request.path.startswith("/assets/") and (
+        request.path.endswith(".js") or request.path.endswith(".css")
+    ):
+        response.headers.setdefault(
+            "Cache-Control", "public, max-age=31536000, immutable"
+        )
+        return response
+
     if request.path.endswith(".js") or request.path.endswith(".css") or is_entry_point:
         response.headers.setdefault("Cache-Control", "no-store")
         return response

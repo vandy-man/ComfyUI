@@ -103,11 +103,17 @@ async def deprecation_warning(request: web.Request, handler):
 async def compress_body(request: web.Request, handler):
     accept_encoding = request.headers.get("Accept-Encoding", "")
     response: web.Response = await handler(request)
-    if not isinstance(response, web.Response):
+    if not isinstance(response, web.StreamResponse):
         return response
-    if response.content_type not in ["application/json", "text/plain"]:
+    # FileResponse's content_type is only resolved during prepare, so decide
+    # static files by path extension; content_type check covers dynamic routes.
+    static_compressible = request.path.endswith((".js", ".css", ".json", ".svg", ".map", ".html"))
+    if (
+        not static_compressible
+        and response.content_type not in ["application/json", "text/plain"]
+    ):
         return response
-    if response.body and "gzip" in accept_encoding:
+    if "gzip" in accept_encoding and response.status == 200:
         response.enable_compression()
     return response
 
