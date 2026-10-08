@@ -213,6 +213,49 @@ def sample_euler(model, x, sigmas, extra_args=None, callback=None, disable=None,
 
 
 @torch.no_grad()
+def sample_euler_spectrum(model, x, sigmas, extra_args=None, callback=None, disable=None, start_perc=0.25):
+    """Euler with Spectrum step-skipping: capture pass forecasts skipped steps from
+    archived velocities, then a transformer-free replay pass smooths the trajectory.
+    Requires at least 4 steps and cfg-free or standard guidance; falls back to plain
+    euler below 4 steps."""
+    extra_args = {} if extra_args is None else extra_args
+    s_in = x.new_ones([x.shape[0]])
+    total_steps = len(sigmas) - 1
+    if total_steps < 4:
+        return sample_euler(model, x, sigmas, extra_args, callback, disable)
+    from .spectrum import SpectrumFeatureForecaster
+
+    fc = SpectrumFeatureForecaster(sigmas[:-1], start_step=max(1, int(start_perc * total_steps)))
+    x_init = x.detach().clone()
+    for i in trange(total_steps, disable=disable):
+        sigma_hat = sigmas[i]
+        fc.begin_step(i)
+        if fc.forecasting:
+            d = fc.predict(x.device, x.dtype)
+        else:
+            denoised = model(x, sigma_hat * s_in, **extra_args)
+            d = to_d(x, sigma_hat, denoised)
+            fc.observe(d)
+            if callback is not None:
+                callback({'x': x, 'i': i, 'sigma': sigmas[i], 'sigma_hat': sigma_hat, 'denoised': denoised})
+        dt = sigmas[i + 1] - sigma_hat
+        x = x + d * dt
+        fc.finish_step()
+
+    fc.complete_capture()
+    fc.start_replay()
+    x = x_init
+    for i in range(total_steps):
+        sigma_hat = sigmas[i]
+        fc.begin_step(i)
+        d = fc.predict(x.device, x.dtype)
+        dt = sigmas[i + 1] - sigma_hat
+        x = x + d * dt
+        fc.finish_step()
+    return x
+
+
+@torch.no_grad()
 def sample_euler_ancestral(model, x, sigmas, extra_args=None, callback=None, disable=None, eta=1., s_noise=1., noise_sampler=None):
     if isinstance(model.inner_model.inner_model.model_sampling, comfy.model_sampling.CONST):
         return sample_euler_ancestral_RF(model, x, sigmas, extra_args, callback, disable, eta, s_noise, noise_sampler)
